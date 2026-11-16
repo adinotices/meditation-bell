@@ -34,7 +34,7 @@ from gi.repository import Gdk, Gio, GLib, Gst, Gtk, Pango, PangoCairo  # noqa: E
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.expanduser("~/.local/share/bell-timer")
-BELL_PATH = os.path.join(APP_DIR, "bell.mp3")              # interval bell
+BELL_PATH = os.path.join(APP_DIR, "interval_bell.wav")   # interval bell
 START_BELL_PATH = os.path.join(APP_DIR, "start_bell.wav")  # opening bell
 END_BELL_PATH = os.path.join(APP_DIR, "end_bell.wav")      # closing bell
 LOG_PATH = os.path.join(DATA_DIR, "sessions.jsonl")

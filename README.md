@@ -41,13 +41,9 @@ or `./install.sh` to add a launcher entry and a `bell-timer` command.
 | --- | --- | --- |
 | `start_bell.wav` | Opening bell | ["bell-meditation_cleaned.wav" by JetRye](https://freesound.org/s/140128/), CC0 |
 | `end_bell.wav` | Closing bell | ["temple_bell_002.wav" by tec_studio](https://freesound.org/s/668647/), CC0 |
-| `bell.mp3` | Interval bell | not included |
+| `interval_bell.wav` | Interval bell | ["Bright Tibetan Bell Ding B Note - cleaner" by steaq](https://freesound.org/s/346328/), CC0 |
 
-The interval bell I use is ["Bell FX" by SoundReality](https://pixabay.com/sound-effects/bell-fx-410608/)
-on Pixabay. Its licence does not allow passing the file on by itself, so it is
-not in this repository. Download it and save it as `bell.mp3` next to
-`bell_timer.py`, or use any sound you like under that name. Without it, the
-opening bell is used for intervals too.
+To use your own sounds, replace any of these files with one of the same name.
 
 ## Your data
 
