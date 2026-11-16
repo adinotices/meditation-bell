@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# Interval bell from Pixabay: its licence doesn't allow redistributing the file on its own.
+bell.mp3
+# Never commit practice data
+sessions.jsonl*
+current.json
+config.json
