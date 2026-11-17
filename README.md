@@ -11,8 +11,10 @@ keep a journal of how much you have meditated.
 - **Any length, or ∞.** Hours and minutes, or no end at all: interval bells keep ringing until you stop.
 - **Interval bells** at any number of minutes, plus separate opening and closing bells.
 - **Warm up.** A short countdown after Begin (15 seconds by default) so you can settle before the opening bell.
-- **Journal.** Today, last 7 and 30 days, all time, day streak, a 14-day chart and a list of meditations. Ending early lets you choose whether to save.
-- **Built for long sits.** The clock counts through pauses correctly, keeps the laptop from idle-suspending when that would stop the bells, tells you if the laptop slept mid-meditation, and recovers an unfinished meditation after a crash or power loss.
+- **Extra time.** When a timed meditation reaches its end, the closing bell rings and a "+m:ss" counter keeps going for as long as you choose to stay. Press End and pick what goes in the journal: the planned length, or the planned length plus the extra.
+- **You decide what's saved.** Ending early asks whether to save or not (under a minute is never saved). The End dialog saves exactly what it shows, and the closing bell waits while it's open.
+- **Journal.** Today, last 7 and 30 days, all time, day streak, a 14-day chart and a list of meditations. Add a meditation by hand or delete one (a backup of the previous journal is kept).
+- **Built for long sits.** Timing is based on a clock that keeps counting through suspend, pauses are excluded, and the laptop is kept from idle-suspending when that would stop the bells (until the planned end; extra time has no bells, so the laptop may sleep). If it slept mid-meditation the app tells you, and an unfinished meditation is recovered after a crash or power loss. Extra time stops counting after 4 hours in case the app was left running.
 - **Calm to look at.** Light and dark themes (follows the system, with a toggle), a dimmed view after 30 seconds, and colour contrast that meets WCAG AA.
 
 ## Requirements
@@ -20,7 +22,8 @@ keep a journal of how much you have meditated.
 Python 3 with GTK 3 (PyGObject) and GStreamer. On Debian, Ubuntu or Pop!_OS:
 
 ```sh
-sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-gstreamer-1.0 gstreamer1.0-plugins-good
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gstreamer-1.0 \
+    gstreamer1.0-plugins-good
 ```
 
 Developed on Pop!_OS with the COSMIC desktop. It should run on any GTK 3 desktop;
@@ -45,13 +48,40 @@ or `./install.sh` to add a launcher entry and a `bell-timer` command.
 
 To use your own sounds, replace any of these files with one of the same name.
 
+## Tests
+
+```sh
+sudo apt install python3-pytest libgtk-3-bin   # pytest, and broadwayd for headless windows
+pytest                 # everything (about 50 s)
+pytest -m "not system" # skip the tests that use real audio, power and session services
+```
+
+The suite has unit tests (formatting, journal file handling, WCAG colour
+contrast), integration tests that drive the real window with a fake clock
+(bells, pause, warm-up, extra time, saving, crash recovery, the journal page,
+accessibility, rendering every state in both themes), regression tests for bugs
+fixed in the past, and system tests (decoding and playing each bell, the real
+sleep lock and idle inhibitor, logout and crash handling of a real app process,
+and the installer). Windows open on a private Broadway display when `broadwayd`
+is installed (without it they open on your desktop, and the system tests run a
+real meditation in a child process). Every test uses a temporary data folder, so
+your journal is never touched.
+
 ## Your data
 
 Everything stays on your machine, in `~/.local/share/bell-timer/`:
-`sessions.jsonl` (one line per meditation), `config.json` (last settings) and
-`current.json` (a checkpoint while a meditation is running). The app makes no
-network connections.
+`sessions.jsonl` (one line per meditation), `config.json` (last settings),
+`current.json` (a checkpoint while a meditation is running) and, only if a save
+ever fails, `unsaved-*.json` files that are added to the journal at the next
+chance. The folder is readable only by you. The app makes no network connections.
+
+Each journal line is a JSON object: `start`, `end`, `seconds` (the time saved),
+`planned` (`null` for ∞), `interval`, `bells`, `completed`, and when they apply
+`extra_seconds` (extra time included), `unsaved_extra_seconds` (extra time noted
+but not added, when the app was closed by logout or a crash), `asleep_seconds`,
+`recovered` and `manual`. You can edit the file by hand.
 
 ## Licence
 
-Code: MIT (see `LICENSE`). Bell recordings: CC0, by their authors above.
+Code and `logo.png` (made for this project with an AI image generator): MIT, see
+`LICENSE`. Bell recordings: CC0, by their authors above.

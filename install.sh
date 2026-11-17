@@ -14,7 +14,7 @@ cat > "$HOME/.local/share/applications/bell-timer.desktop" <<DESKTOP
 Type=Application
 Name=Meditation Bell
 Comment=Meditation timer with interval bells and a practice log
-Exec=$HOME/.local/bin/bell-timer
+Exec="$HOME/.local/bin/bell-timer"
 Icon=$here/logo.png
 Terminal=false
 Categories=Utility;

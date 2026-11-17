@@ -6,3 +6,4 @@ bell.mp3
 sessions.jsonl*
 current.json
 config.json
+.pytest_cache/
