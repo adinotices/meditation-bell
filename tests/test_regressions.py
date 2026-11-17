@@ -49,9 +49,10 @@ def test_start_now_rings_opening_bell_once(app, clock):
     assert app.events.count("start") == 1
 
 
-def test_planned_end_passing_while_end_dialog_is_open_saves_what_was_shown(app, clock, dialogs):
-    """The planned end may pass while you're reading the End dialog: the closing
-    bell rings as usual, and what's saved is what the dialog said."""
+def test_dialog_overtaken_by_the_planned_end_is_asked_again(app, clock, dialogs):
+    """The planned end passes while the End dialog is open: the closing bell
+    rings, and since the dialog's numbers are now out of date it's asked again
+    with the current ones; what's saved is what that second dialog showed."""
     begin(app, clock, minutes=2)
     run_for(app, clock, 100)
 
@@ -59,25 +60,43 @@ def test_planned_end_passing_while_end_dialog_is_open_saves_what_was_shown(app, 
         run_for(app, clock, 60)
         assert app.events.count("end") == 1 and app.overtime
         return Gtk.ResponseType.OK
-    dialogs.answer(end_passes_while_open)
+    dialogs.answer(end_passes_while_open, Gtk.ResponseType.OK)
     app.on_stop_clicked(None)
+    assert dialogs.seen[0]["body"].startswith("You have meditated for 0:01:42")
+    assert dialogs.seen[1]["title"] == "Your meditation went on while this was open"
+    assert dialogs.seen[1]["body"] == "Your 2m meditation is complete."
     rec = journal(bt.DATA_DIR)[-1]
-    assert rec["seconds"] == 102 and rec["completed"] is False
+    assert rec["seconds"] == 120 and rec["completed"] is True
 
 
-def test_end_passing_during_dialog_then_discard_keeps_its_word(app, clock, dialogs):
-    """1-minute meditation, End opened at 40 s ("under a minute isn't saved").
-    The closing bell still rings, and clicking End does what the dialog said."""
+def test_discard_from_a_stale_dialog_is_asked_again(app, clock, dialogs):
+    """1-minute meditation, End opened at 40 s ("under a minute isn't saved"),
+    answered after the closing bell: the choice is offered again, now as a
+    completed meditation, so it isn't thrown away unseen."""
     begin(app, clock, minutes=1)
     run_for(app, clock, 38)
 
     def wait_then_end(_dlg):
         run_for(app, clock, 60)
         return Gtk.ResponseType.REJECT
-    dialogs.answer(wait_then_end)
+    dialogs.answer(wait_then_end, Gtk.ResponseType.OK)
     app.on_stop_clicked(None)
-    assert dialogs.last["buttons"] == ["_Keep meditating", "_End"]
-    assert app.events.count("end") == 1 and journal(bt.DATA_DIR) == []
+    assert dialogs.seen[0]["buttons"] == ["_Keep meditating", "_End"]
+    assert dialogs.seen[1]["buttons"] == ["_Keep meditating", "End and _save"]
+    assert app.events.count("end") == 1
+    assert journal(bt.DATA_DIR)[-1]["seconds"] == 60
+
+
+def test_quick_answer_saves_what_was_shown(app, clock, dialogs):
+    begin(app, clock, minutes=30)
+    run_for(app, clock, 300)
+
+    def quick(_dlg):
+        run_for(app, clock, 20)      # read it, answered within a minute
+        return Gtk.ResponseType.OK
+    dialogs.answer(quick)
+    app.on_stop_clicked(None)
+    assert len(dialogs.seen) == 1 and journal(bt.DATA_DIR)[-1]["seconds"] == 302
 
 
 def test_keep_after_end_passed_in_dialog_rings_closing_bell_once(app, clock, dialogs):
@@ -140,8 +159,10 @@ def test_no_interval_bell_with_closing_bell_after_sleep(app, clock):
 def test_extra_time_lets_the_laptop_sleep(app, clock):
     begin(app, clock, minutes=5)
     assert app.events.count("inhibit_on") == 1 and app.idle_blocked
-    run_for(app, clock, 298 + 1)
-    assert app.overtime and app.events.count("lock_off") == 1 and not app.idle_blocked
+    run_for(app, clock, 298 + 10)
+    assert app.overtime and app.idle_blocked     # the closing bell is still sounding
+    run_for(app, clock, bt.CLOSING_BELL_SECONDS)
+    assert app.events.count("lock_off") == 1 and not app.idle_blocked
     run_for(app, clock, 600)
     assert app.events.count("inhibit_on") == 1 and not app.idle_blocked
 

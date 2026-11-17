@@ -43,7 +43,9 @@ def test_sleep_option_right_after_the_closing_bell(app, clock, dialogs):
     assert journal(bt.DATA_DIR)[-1]["seconds"] == 1800
 
 
-def test_without_sleep_uses_the_sleep_shown_when_the_dialog_opened(app, clock, dialogs):
+def test_without_sleep_matches_the_dialog_that_was_answered(app, clock, dialogs):
+    """Sleep while the dialog is open makes it stale: it's asked again, and
+    "without sleep" then uses the sleep that second dialog shows."""
     begin(app, clock, infinite=True)
     run_for(app, clock, 1798)
     clock.sleep(600)
@@ -53,11 +55,27 @@ def test_without_sleep_uses_the_sleep_shown_when_the_dialog_opened(app, clock, d
         clock.sleep(1200)
         app._tick()
         return R.APPLY
-    dialogs.answer(sleeps_again)
+    dialogs.answer(sleeps_again, R.APPLY)
     app.on_stop_clicked(None)
-    assert "Save 30m, without s_leep" in dialogs.last["buttons"]
+    assert "Save 30m, without s_leep" in dialogs.seen[0]["buttons"]
+    assert "The laptop slept for 30m of that." in dialogs.seen[1]["body"]
     rec = journal(bt.DATA_DIR)[-1]
-    assert rec["seconds"] == 1800 and rec["asleep_seconds"] == 600
+    assert rec["seconds"] == 1800 and rec["asleep_seconds"] == 1800
+
+
+def test_without_sleep_uses_the_snapshot_when_answered_promptly(app, clock, dialogs):
+    begin(app, clock, infinite=True)
+    run_for(app, clock, 1798)
+    clock.sleep(600)
+    app._tick()
+    app.asleep += 0.4                # sub-second drift isn't "stale"
+
+    def prompt(_dlg):
+        run_for(app, clock, 10)
+        return R.APPLY
+    dialogs.answer(prompt)
+    app.on_stop_clicked(None)
+    assert len(dialogs.seen) == 1 and journal(bt.DATA_DIR)[-1]["seconds"] == 1800
 
 
 @pytest.mark.parametrize("setup", ["early", "early_sleep", "extra", "extra_sleep", "just_rang"])

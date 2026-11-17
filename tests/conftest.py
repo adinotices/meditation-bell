@@ -41,7 +41,9 @@ def start_broadway(first=None):
 
 
 def _start_broadway():
+    import atexit
     proc, disp = start_broadway()
+    atexit.register(proc.terminate)   # even if pytest is cut short
     os.environ["GDK_BACKEND"] = "broadway"
     os.environ["BROADWAY_DISPLAY"] = disp
     return proc

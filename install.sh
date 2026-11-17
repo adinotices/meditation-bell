@@ -8,6 +8,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 app_id="io.github.adinotices.MeditationBell"
 bin="$HOME/.local/bin/bell-timer"
 apps="$HOME/.local/share/applications"
+case "$here" in
+    *$'\n'*) echo "The folder path contains a line break; move the app elsewhere first." >&2
+              exit 1 ;;
+esac
 mkdir -p "$HOME/.local/bin" "$apps"
 
 # Desktop-entry quoting: inside "...", escape \ " ` and $ with a backslash.
@@ -28,7 +32,10 @@ printf '#!/usr/bin/env bash\nexec /usr/bin/python3 %q "$@"\n' "$here/bell_timer.
 chmod +x "$bin"
 
 # the desktop file is named after the app ID, so notifications and docks match it
-rm -f "$apps/bell-timer.desktop"   # name used by earlier versions
+# name used by earlier versions (removed only if it's ours)
+if grep -qs "Name=Meditation Bell" "$apps/bell-timer.desktop"; then
+    rm -f "$apps/bell-timer.desktop"
+fi
 {
     echo "[Desktop Entry]"
     echo "Type=Application"

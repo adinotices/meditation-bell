@@ -297,18 +297,20 @@ def test_crash_in_extra_time_recovers_planned_length(make_app, clock, dialogs):
     assert rec["seconds"] == 300 and rec["unsaved_extra_seconds"] == 540 and rec["recovered"]
 
 
-def test_extra_time_dialog_saves_shown_amount_even_if_left_open(app, clock, dialogs):
-    """Reviewer's probe B: the button said 7m 30s but 17m 30s was saved."""
+def test_extra_time_dialog_left_open_is_asked_again(app, clock, dialogs):
+    """Probe B (first review): the button said 7m 30s but 17m 30s was saved.
+    Now a dialog left open is asked again, and saves what the answered one said."""
     begin(app, clock, minutes=5)
     run_for(app, clock, 298 + 150)
 
     def leave_open(_dlg):
         run_for(app, clock, 600)
         return R.OK
-    dialogs.answer(leave_open)
+    dialogs.answer(leave_open, R.OK)
     app.on_stop_clicked(None)
-    assert dialogs.last["buttons"][-1] == "Save 7m 30s with _extra"
-    assert journal(bt.DATA_DIR)[-1]["seconds"] == 450
+    assert dialogs.seen[0]["buttons"][-1] == "Save 7m 30s with _extra"
+    assert dialogs.seen[1]["buttons"][-1] == "Save 17m 30s with _extra"
+    assert journal(bt.DATA_DIR)[-1]["seconds"] == 1050
 
 
 # ---------------------------------------------------------------- journal page

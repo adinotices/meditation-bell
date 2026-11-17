@@ -185,7 +185,7 @@ def test_installer_writes_launcher_and_command(tmp_path, folder):
     home.mkdir()
     apps = home / ".local/share/applications"
     apps.mkdir(parents=True)
-    (apps / "bell-timer.desktop").write_text("old")          # from an earlier version
+    (apps / "bell-timer.desktop").write_text("[Desktop Entry]\nName=Meditation Bell\n")  # ours, older
     env = {**os.environ, "HOME": str(home)}
     subprocess.run(["bash", os.path.join(ROOT, "install.sh")], env=env, check=True,
                    capture_output=True)
