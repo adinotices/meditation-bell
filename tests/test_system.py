@@ -179,7 +179,7 @@ def test_hard_kill_then_carry_on(tmp_path):
 
 # ---------------------------------------------------------------- installer
 
-@pytest.mark.parametrize("folder", ["home", 'odd "home" $dir `x` \\ here'])
+@pytest.mark.parametrize("folder", ["home", 'odd "home" $dir `x` \\ 100% here'])
 def test_installer_writes_launcher_and_command(tmp_path, folder):
     home = tmp_path / folder
     home.mkdir()
@@ -198,10 +198,28 @@ def test_installer_writes_launcher_and_command(tmp_path, folder):
     desktop = (apps / "io.github.adinotices.MeditationBell.desktop").read_text()
     assert not (apps / "bell-timer.desktop").exists()
     assert f"Icon={ROOT}/logo.png" in desktop and "StartupWMClass=bell-timer" in desktop
-    exec_line = [l for l in desktop.splitlines() if l.startswith("Exec=")][0]
-    # undo desktop-entry quoting and check it names the command
-    assert exec_line.startswith('Exec="') and exec_line.endswith('"')
-    assert re.sub(r"\\(.)", r"\1", exec_line[6:-1]) == str(cmd)
+    # read it as the desktop does: a desktop-file string, then a command line
+    from gi.repository import GLib
+    kf = GLib.KeyFile()
+    kf.load_from_file(str(apps / "io.github.adinotices.MeditationBell.desktop"),
+                      GLib.KeyFileFlags.NONE)
+    ok, argv = GLib.shell_parse_argv(kf.get_string("Desktop Entry", "Exec"))
+    assert [a.replace("%%", "%") for a in argv] == [str(cmd)]
+    if "%" in folder:
+        return   # GLib's launcher can't start a program with % in its path at all
+    # and launch it, with the command swapped for one that reports how it was started
+    cmd.write_text('#!/bin/sh\nprintf "%s" "$0" > "$MARKER"\n')
+    marker = tmp_path / "launched"
+    launch = ("import sys\nfrom gi.repository import Gio\n"
+              "Gio.DesktopAppInfo.new_from_filename(sys.argv[1]).launch([], None)\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DBUS")}
+    subprocess.run([sys.executable, "-c", launch,
+                    str(apps / "io.github.adinotices.MeditationBell.desktop")],
+                   env={**env, "MARKER": str(marker)}, check=True, timeout=30)
+    end = time.time() + 10
+    while not marker.exists() and time.time() < end:
+        time.sleep(0.05)
+    assert marker.read_text() == str(cmd)
 
 
 def test_installer_wont_replace_someone_elses_command(tmp_path):

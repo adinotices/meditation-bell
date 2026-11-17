@@ -246,11 +246,14 @@ def test_bell_failure_after_terminal_closed_still_retries(monkeypatch):
     assert scheduled == [300] and p not in bell.players
 
 
-def test_shutdown_closes_open_dialogs(app, clock):
+def test_shutdown_closes_open_dialogs(app, clock, monkeypatch):
     closed = []
     app._dialogs.append(types.SimpleNamespace(response=closed.append))
     begin(app, clock, minutes=30)
     app.on_prepare_shutdown(GLib.Variant("(b)", (True,)))
+    assert closed == [] and app.running        # could still be cancelled
+    monkeypatch.setattr(app, "quit", lambda: None)
+    app.on_signal()                             # the SIGTERM that follows
     assert closed == [R.DELETE_EVENT] and not app.running
 
 

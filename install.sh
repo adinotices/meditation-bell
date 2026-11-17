@@ -14,13 +14,18 @@ case "$here" in
 esac
 mkdir -p "$HOME/.local/bin" "$apps"
 
-# Desktop-entry quoting: inside "...", escape \ " ` and $ with a backslash.
+# An Exec value is read twice: first as a desktop-file string (where \\ means \),
+# then as a command line (where, inside "...", \ " ` and $ need a backslash and a
+# literal % is written %%). So: quote it for the command line, then double every
+# backslash for the string.
 desktop_quote() {
     local s=${1//\\/\\\\}
     s=${s//\"/\\\"}
     s=${s//\`/\\\`}
     s=${s//\$/\\\$}
-    printf '"%s"' "$s"
+    s=${s//%/%%}
+    s="\"$s\""
+    printf '%s' "${s//\\/\\\\}"
 }
 
 # don't replace someone else's `bell-timer` command

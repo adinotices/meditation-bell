@@ -12,6 +12,7 @@ Colours: two palettes (paper / ink) that follow the COSMIC light/dark mode
 unless overridden. Every text/background pair is WCAG 2.2 AA (most AAA);
 UI boundaries, focus rings and chart marks are >= 3:1 (SC 1.4.11).
 """
+import atexit
 import datetime as dt
 import fcntl
 import glob
@@ -21,7 +22,9 @@ import os
 import re
 import shutil
 import signal
+import struct
 import sys
+import tempfile
 import time
 import warnings
 
@@ -32,7 +35,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gst", "1.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gdk, Gio, GLib, Gst, Gtk, Pango, PangoCairo  # noqa: E402
+gi.require_version("Atk", "1.0")
+from gi.repository import Atk, Gdk, Gio, GLib, Gst, Gtk, Pango, PangoCairo  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.expanduser("~/.local/share/bell-timer")
@@ -50,6 +54,7 @@ AUDIO_SINK_CMD = ["pactl", "get-default-sink"]   # pulseaudio-utils (works with 
 MAX_RECORD_SECONDS = 7 * 86400   # a hand-typed length beyond this is a typo
 MIN_LOG_SECONDS = 60          # meditations shorter than this aren't logged
 CHECKPOINT_EVERY = 10         # seconds between crash-recovery checkpoints
+PAUSED_CHECKPOINT_EVERY = 60  # ...and while paused (so "Carry on?" stays on offer)
 END_STRIKES = 3               # fallback if the end bell file is missing
 STRIKE_GAP_MS = 4000
 DIM_AFTER = 30                # seconds without input before the meditation view dims
@@ -510,7 +515,7 @@ class Bell:
             self.missing.remove(os.path.basename(path))
         self.volume = 0.8
         self.players = []
-        self.beeps = []
+        self.beep_uri = None
 
     def strike(self, times=1):
         for i in range(times):
@@ -525,28 +530,13 @@ class Bell:
         else:
             self.strike(END_STRIKES)
 
-    def beep(self, sink="autoaudiosink"):
-        """Two short soft tones, played through GStreamer like the bells."""
-        rate, tone = 44100, 0.12
-        n = int(rate * tone / 1024) + 1
-        p = Gst.parse_launch(
-            f"concat name=c ! audioconvert ! volume volume={0.25 * self.volume:.3f} ! {sink} "
-            f"audiotestsrc freq=660 num-buffers={n} samplesperbuffer=1024 ! c. "
-            f"audiotestsrc freq=495 num-buffers={n} samplesperbuffer=1024 ! c.")
-        bus = p.get_bus()
-        bus.add_signal_watch()
-
-        def done(_bus, msg):
-            if msg.type in (Gst.MessageType.EOS, Gst.MessageType.ERROR):
-                bus.disconnect(p._hid)
-                bus.remove_signal_watch()
-                p.set_state(Gst.State.NULL)
-                if p in self.beeps:
-                    self.beeps.remove(p)
-        p._hid = bus.connect("message", done)
-        self.beeps.append(p)
-        p.set_state(Gst.State.PLAYING)
-        return p
+    def beep(self, sink=None):
+        """Two short soft tones, played like a bell (same stall watchdog). Never
+        silent, even at zero bell volume: it tells you a press did nothing."""
+        if self.beep_uri is None:
+            self.beep_uri = Gst.filename_to_uri(write_beep_wav())
+        return self._play_once(self.beep_uri, retry=False, volume=max(self.volume, 0.4),
+                               sink=sink, what="The refusal tone")
 
     def play_preview(self, which):
         """Preview a bell, cutting off any preview still ringing."""
@@ -556,13 +546,16 @@ class Bell:
                "end": self.end_uri or self.uri}[which]
         self.preview = self._play_once(uri)
 
-    def _play_once(self, uri, retry=True):
+    def _play_once(self, uri, retry=True, volume=None, sink=None, what="A bell"):
         p = Gst.ElementFactory.make("playbin", None)
         if p is None:
             self._report("GStreamer playbin is unavailable")
             return None
         p.set_property("uri", uri)
-        p.set_property("volume", self.volume)
+        p.set_property("volume", self.volume if volume is None else volume)
+        if sink:      # tests: a description such as "fakesink sync=true"
+            p.set_property("audio-sink", Gst.parse_bin_from_description(sink, True))
+        p._what = what
         bus = p.get_bus()
         bus.add_signal_watch()
         p._hid = bus.connect("message", self._on_msg, p, uri, retry)
@@ -602,7 +595,7 @@ class Bell:
         if retry:   # e.g. audio device changed (dock/Bluetooth): try a fresh player
             GLib.timeout_add(300, lambda: self._play_once(uri, retry=False) and False)
         else:
-            self._report(f"A bell couldn’t play ({err})")
+            self._report(f"{getattr(p, '_what', 'A bell')} couldn’t play ({err})")
 
     def _cleanup(self, p):
         bus = p.get_bus()
@@ -625,6 +618,37 @@ class Bell:
     def _report(self, text):
         if self.on_error:
             self.on_error(text)
+
+
+def beep_wav_bytes(rate=44100):
+    """The refusal tone: 660 Hz then 495 Hz, 0.12 s each, at a quarter of full
+    scale, with 10 ms fades so neither note clicks."""
+    n, fade = int(rate * 0.12), int(rate * 0.01)
+    samples = []
+    for freq in (660, 495):
+        for i in range(n):
+            env = min(1.0, i / fade, (n - 1 - i) / fade)
+            samples.append(int(32767 * 0.25 * env * math.sin(2 * math.pi * freq * i / rate)))
+    data = struct.pack(f"<{len(samples)}h", *samples)
+    return (b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(data)) + data)
+
+
+_beep_path = None
+
+
+def write_beep_wav():
+    """Writes the tone once per run to a private temporary file; returns its path."""
+    global _beep_path
+    if _beep_path is None or not os.path.exists(_beep_path):
+        fd, path = tempfile.mkstemp(prefix="bell-timer-beep-", suffix=".wav",
+                                    dir=GLib.get_user_runtime_dir())
+        with os.fdopen(fd, "wb") as f:
+            f.write(beep_wav_bytes())
+        atexit.register(lambda: os.path.exists(path) and os.unlink(path))
+        _beep_path = path
+    return _beep_path
 
 
 # ---------------------------------------------------------------- ring
@@ -807,6 +831,7 @@ class BellTimer(Gtk.Application):
         self.bells_rung = 0
         self.start_wall = None
         self.last_checkpoint = 0.0
+        self._checkpoint_clock = now_clock()
         self.dimmed = False
         self.last_input = 0.0
         self.started_at = 0.0
@@ -1044,10 +1069,12 @@ class BellTimer(Gtk.Application):
             pass
 
     def on_prepare_shutdown(self, *args):
+        """True: about to shut down. It can still be cancelled, so don't end the
+        meditation; write a fresh checkpoint, which is saved at the next launch if
+        the app is killed (and the SIGTERM that usually comes first saves it now)."""
         params = next((a for a in args if isinstance(a, GLib.Variant)), None)
-        if params is None or params.unpack()[0]:   # True: about to shut down
-            self.finish("auto")
-            self.close_dialogs()
+        if (params is None or params.unpack()[0]) and self.running:
+            self.checkpoint()
 
     def build_timer_page(self):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1223,7 +1250,13 @@ class BellTimer(Gtk.Application):
             tile = add_class(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2), "card")
             num = label("–", "stat-num", xalign=0)
             tile.pack_start(num, False, False, 0)
-            tile.pack_start(label(title, "stat-lbl", xalign=0), False, False, 0)
+            # the number is read as "Today: 1 hour" (see refresh_stats), so a screen
+            # reader is told to skip the title shown under it
+            title_lbl = label(title, "stat-lbl", xalign=0)
+            acc = title_lbl.get_accessible()
+            if acc is not None:
+                acc.set_role(Atk.Role.REDUNDANT_OBJECT)
+            tile.pack_start(title_lbl, False, False, 0)
             g.attach(tile, i % 3, i // 3, 1, 1)
             self.stat_labels[k] = (num, title)
         box.pack_start(g, False, False, 0)
@@ -1471,6 +1504,7 @@ class BellTimer(Gtk.Application):
         self.overtime = False
         self.extra_capped = False
         self.last_checkpoint = 0.0
+        self._checkpoint_clock = now_clock()
         self.asleep = 0.0
         self._last_tick = None
         self._next_awake_check = 0.0
@@ -1517,7 +1551,7 @@ class BellTimer(Gtk.Application):
                 self.set_status(msg, error=True, prefix="Note: ")
         self._last_tick, self._last_awake = now, awake
         if now >= self._next_awake_check:
-            self.refresh_awake()
+            self.refresh_awake_safely()
         el = self.elapsed()
         if self.target is not None and el >= self.target and not self.overtime:
             # the planned meditation is done: ring the closing bell, then keep
@@ -1527,7 +1561,7 @@ class BellTimer(Gtk.Application):
             # still what the dialog showed.)
             self.bell.strike_end()
             self.overtime = True
-            self.refresh_awake()  # no bells are left to ring, so sleep is harmless now
+            self.refresh_awake_safely()  # no bells are left to ring, so sleep is harmless now
             self.checkpoint()
         if self.overtime and not self.paused and el - self.target >= EXTRA_MAX \
                 and not self.extra_capped:
@@ -1549,8 +1583,9 @@ class BellTimer(Gtk.Application):
                 self.bells_rung += 1
                 self.bell.strike(1)
                 self.checkpoint()   # so carrying on after a crash can't ring it again
-        if el - self.last_checkpoint >= CHECKPOINT_EVERY:
-            self.checkpoint()
+        if (el - self.last_checkpoint >= CHECKPOINT_EVERY
+                or (self.paused and now - self._checkpoint_clock >= PAUSED_CHECKPOINT_EVERY)):
+            self.checkpoint()   # while paused too, so a crash can still be carried on from
         if (self.stack.get_visible_child_name() == "journal"
                 and self._stats_min != int(el // 60)):
             self._stats_min = int(el // 60)
@@ -1591,13 +1626,15 @@ class BellTimer(Gtk.Application):
             while True:
                 el = self.elapsed()
                 opened = now_awake()
-                state = (self.bells_rung, self.overtime, int(self.asleep))
+                state = (self.bells_rung, self.overtime, int(self.asleep), self.paused)
                 self._ask_wall = dt.datetime.now().astimezone()
                 self._ask_bells = self.bells_rung
                 self._ask_asleep = self.asleep
                 choice = self._ask_end(title, quitting, el)
-                stale = (now_awake() - opened > STALE_DIALOG
-                         or state != (self.bells_rung, self.overtime, int(self.asleep)))
+                # paused throughout, the numbers can't have changed however long it was open
+                stale = ((now_awake() - opened > STALE_DIALOG and not self.paused)
+                         or state != (self.bells_rung, self.overtime, int(self.asleep),
+                                      self.paused))
                 if choice == "keep" or not stale or not self.running:
                     break
                 # left open a while (or a bell rang, or the planned end passed):
@@ -1796,13 +1833,15 @@ class BellTimer(Gtk.Application):
         planned length, with the extra noted but not added (see finish "auto")."""
         el = self.elapsed()
         self.last_checkpoint = el
+        self._checkpoint_clock = now_clock()
         if self.overtime:
             rec = self.make_record(self.target, True)
             rec["unsaved_extra_seconds"] = max(0, int(el) - self.target)
         else:
             rec = self.make_record(el, False)
         # enough to carry on after a crash ("_" fields never reach the journal)
-        rec["_resume"] = {"boot_id": boot_id(), "clock": now_clock(), "elapsed": el,
+        rec["_resume"] = {"boot_id": boot_id(), "clock": now_clock(), "awake": now_awake(),
+                          "elapsed": el,
                           "paused": self.paused, "overtime": self.overtime,
                           "next_k": self.next_k, "asleep": self.asleep,
                           "extra_capped": self.extra_capped}
@@ -1835,6 +1874,16 @@ class BellTimer(Gtk.Application):
         return float(info["elapsed"]) + (0 if info.get("paused") else
                                          max(0.0, now_clock() - float(info["clock"])))
 
+    @staticmethod
+    def resumed_slept(info):
+        """How long the laptop slept between a crash checkpoint and now."""
+        try:
+            slept = ((now_clock() - float(info["clock"]))
+                     - (now_awake() - float(info["awake"])))
+        except (KeyError, TypeError, ValueError):
+            return 0.0       # an older checkpoint: can't tell
+        return slept if slept > SLEEP_GAP else 0.0
+
     def offer_resume(self, rec):
         info = rec["_resume"]
         el = self.resumed_elapsed(info)
@@ -1844,11 +1893,20 @@ class BellTimer(Gtk.Application):
                                 message_type=Gtk.MessageType.QUESTION,
                                 buttons=Gtk.ButtonsType.NONE,
                                 text="Carry on with your meditation?")
-        dlg.format_secondary_text(
-            f"The app closed unexpectedly during a meditation, {fmt_hms(el)} in. "
-            f"Carry on from where it is now, or save the {fmt_hms_short(saved)} it had "
-            "reached to your journal.")
-        dlg.add_button(f"_Save {fmt_hms_short(saved)} to journal", R.REJECT)
+        intro = f"The app closed unexpectedly during a meditation, {fmt_hms(el)} in. "
+        if saved < MIN_LOG_SECONDS:
+            body = "Carry on from where it is now, or end it (under a minute isn’t saved)."
+            button = "_End (under a minute isn’t saved)"
+        elif info.get("overtime"):
+            body = (f"Carry on from where it is now, or save the planned "
+                    f"{fmt_hms_short(saved)} to your journal (without the extra time).")
+            button = f"_Save the planned {fmt_hms_short(saved)}"
+        else:
+            body = (f"Carry on from where it is now, or save the {fmt_hms_short(saved)} "
+                    "it had reached to your journal.")
+            button = f"_Save {fmt_hms_short(saved)} to journal"
+        dlg.format_secondary_text(intro + body)
+        dlg.add_button(button, R.REJECT)
         dlg.add_button("_Carry on", R.OK)
         dlg.set_default_response(R.OK)
         resp = self.run_dialog(dlg)
@@ -1874,6 +1932,8 @@ class BellTimer(Gtk.Application):
         self.bells_rung = int(rec.get("bells") or 0)
         self.next_k = max(1, int(info.get("next_k") or 1))
         self.asleep = float(info.get("asleep") or 0)
+        if not info.get("paused"):
+            self.asleep += self.resumed_slept(info)   # counted in el, like any sleep
         self.overtime = bool(info.get("overtime"))
         self.extra_capped = bool(info.get("extra_capped"))
         if info.get("paused"):
@@ -2083,7 +2143,7 @@ class BellTimer(Gtk.Application):
         for k, (lbl, title) in self.stat_labels.items():
             shown, spoken = values[k]
             lbl.set_text(shown)
-            set_a11y(lbl, spoken)   # the title label beside it is read first
+            set_a11y(lbl, f"{title}: {spoken}")
 
         self.chart.set_data([(today - dt.timedelta(days=i), per_day.get(today - dt.timedelta(days=i), 0))
                              for i in range(13, -1, -1)])
@@ -2115,6 +2175,12 @@ class BellTimer(Gtk.Application):
                 if s["start"] == target["start"] and s["seconds"] == target["seconds"]:
                     del sessions[i]
                     break
+            else:
+                # changed meanwhile: leave the file (and the last backup) alone
+                self.set_status("That meditation had already changed or gone; nothing deleted.",
+                                error=True, prefix="Note: ")
+                self.refresh_stats()
+                return
             try:
                 rewrite_sessions(sessions, junk)
             except OSError as e:
@@ -2164,10 +2230,14 @@ class BellTimer(Gtk.Application):
                 break
             try:
                 start = dt.datetime.strptime(f"{date_e.get_text().strip()} {time_e.get_text().strip()}",
-                                             "%Y-%m-%d %H:%M").astimezone()
+                                             "%Y-%m-%d %H:%M")
             except ValueError:
                 show_error("check the date and time format.", date_e)
                 continue
+            if start.year < 1970:    # the journal ignores anything earlier
+                show_error("check the year.", date_e)
+                continue
+            start = start.astimezone()
             h.update()
             m.update()
             secs = int(h.get_value()) * 3600 + int(m.get_value()) * 60
@@ -2219,7 +2289,7 @@ class BellTimer(Gtk.Application):
             with open(os.path.join(COSMIC_IDLE_DIR, key)) as f:
                 if f.read().strip() != "None":
                     return True
-        except OSError:
+        except (OSError, ValueError):   # ValueError: e.g. a file that isn't UTF-8
             return True   # can't tell: play safe
         return self.audio_on_display
 
@@ -2263,6 +2333,14 @@ class BellTimer(Gtk.Application):
             return False
         proc.communicate_utf8_async(None, None, done)
         GLib.timeout_add_seconds(3, give_up)
+
+    def refresh_awake_safely(self):
+        """refresh_awake from the timer: whatever goes wrong there, the bells
+        (checked after it) must still ring."""
+        try:
+            self.refresh_awake()
+        except Exception:
+            report_exception()
 
     def refresh_awake(self):
         """Hold the sleep lock and block idle only while a bell is still due."""

@@ -122,6 +122,11 @@ def test_prepare_for_shutdown_saves(app, clock):
     app.on_prepare_shutdown(None, ":1.1", "/org/freedesktop/login1",
                             "org.freedesktop.login1.Manager", "PrepareForShutdown",
                             GLib.Variant("(b)", (True,)))
+    # True = about to shut down, but it can still be cancelled: don't end, just
+    # make sure the checkpoint is fresh (the SIGTERM that follows saves it)
+    assert app.running and journal(bt.DATA_DIR) == []
+    assert json.load(open(bt.CURRENT_PATH))["seconds"] == 602
+    app.on_signal()
     assert not app.running and journal(bt.DATA_DIR)[-1]["seconds"] == 602
 
 

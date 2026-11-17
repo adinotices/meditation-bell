@@ -123,7 +123,7 @@ def test_stat_tiles_are_not_read_twice(app):
                        "seconds": 3600})
     app.refresh_stats()
     lbl, title = app.stat_labels["today"]
-    assert lbl.get_accessible().get_name() == "1 hour"
+    assert lbl.get_accessible().get_name() == "Today: 1 hour"
 
 
 def test_sleep_note_never_exceeds_the_time_counted(app, clock, dialogs):
@@ -140,14 +140,16 @@ def test_sleep_note_never_exceeds_the_time_counted(app, clock, dialogs):
 @pytest.mark.system
 def test_refusal_sound_plays_to_the_end():
     bell = bt.Bell(bt.BELL_PATH, bt.START_BELL_PATH, bt.END_BELL_PATH)
-    bell.beep(sink="fakesink sync=true")
-    assert len(bell.beeps) == 1
+    errors = []
+    bell.on_error = errors.append
+    p = bell.beep(sink="fakesink sync=true")
+    assert bell.players == [p]
     ctx = GLib.MainContext.default()
     end = time.time() + 5
-    while bell.beeps and time.time() < end:
+    while bell.players and time.time() < end:
         ctx.iteration(False)
         time.sleep(0.01)
-    assert bell.beeps == []                    # played (about 0.25 s) and cleaned up
+    assert bell.players == [] and errors == []  # played (about 0.25 s) and cleaned up
 
 
 @pytest.mark.system
