@@ -197,8 +197,10 @@ class Dialogs:
         return self.seen[-1]
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def dialogs(monkeypatch):
+    """Every test: a real modal dialog would block forever, so all of them are
+    answered from this queue, and an unexpected one fails the test."""
     d = Dialogs()
     monkeypatch.setattr(Gtk.Dialog, "run", lambda self: d.run(self))
     return d
@@ -280,6 +282,10 @@ def configure(app, minutes=0, hours=0, infinite=False, interval_min=0, warmup=0,
     app.sp_int.set_value(interval_min)
     app.sp_warm.set_value(warmup)
     app.sw_start.set_active(start_bell)
+    # a value outside a field's range is silently clamped: catch typos in tests
+    for spin, want in ((app.sp_hours, hours), (app.sp_mins, minutes),
+                       (app.sp_int, interval_min), (app.sp_warm, warmup)):
+        assert spin.get_value() == want, f"setting {want} was clamped to {spin.get_value()}"
 
 
 def begin(app, clock, **settings):

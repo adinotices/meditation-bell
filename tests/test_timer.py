@@ -93,11 +93,16 @@ def test_zero_length_is_refused(app, clock):
     assert not app.running and "Set a length" in app.status.get_text()
 
 
-def test_zero_volume_is_refused(app, clock):
+def test_zero_volume_asks_before_starting_silently(app, clock, dialogs):
     configure(app, minutes=5)
     app.vol.set_value(0)
+    dialogs.answer(bt.Gtk.ResponseType.CANCEL)
     app.on_start_pause(None)
+    assert dialogs.last["title"] == "Start with the bells silent?"
     assert not app.running and "Volume is at zero" in app.status.get_text()
+    dialogs.answer(bt.Gtk.ResponseType.OK)
+    app.on_start_pause(None)
+    assert app.running
 
 
 def test_start_takes_sleep_lock_and_finish_releases_it(app, clock, dialogs):
@@ -198,7 +203,7 @@ def test_extra_time_dimmed_view(app, clock):
 # ---------------------------------------------------------------- dimming
 
 def test_dims_after_quiet_and_wakes_on_input(app, clock):
-    begin(app, clock, minutes=60, interval_min=10)
+    begin(app, clock, hours=1, interval_min=10)
     run_for(app, clock, bt.DIM_AFTER - 5)
     assert not app.dimmed
     run_for(app, clock, 10)
@@ -209,7 +214,7 @@ def test_dims_after_quiet_and_wakes_on_input(app, clock):
 
 
 def test_paused_view_does_not_dim(app, clock):
-    begin(app, clock, minutes=60)
+    begin(app, clock, hours=1)
     app.on_start_pause(None)
     run_for(app, clock, 120)
     assert not app.dimmed

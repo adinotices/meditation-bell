@@ -8,7 +8,7 @@ import pytest
 from gi.repository import Gtk
 
 import bell_timer as bt
-from conftest import begin, journal, run_for
+from conftest import begin, journal, pump, run_for
 
 R = Gtk.ResponseType
 
@@ -26,7 +26,7 @@ def test_end_early_and_save(app, clock, dialogs):
     assert rec["seconds"] == 602 and rec["planned"] == 1800 and rec["completed"] is False
     assert rec["interval"] == 600 and rec["bells"] == 1
     assert "extra_seconds" not in rec
-    assert app.status.get_text() == "Meditation ended · 10m 2s added to your journal"
+    assert app.status.get_text() == "Meditation ended · 10m 02s added to your journal"
     assert not app.running and not os.path.exists(bt.CURRENT_PATH)
 
 
@@ -75,7 +75,8 @@ def test_extra_time_dialog_offers_planned_or_total(app, clock, dialogs):
     _into_extra_time(app, clock)
     dialogs.answer(R.CANCEL)
     app.on_stop_clicked(None)
-    assert dialogs.last["buttons"] == ["_Keep meditating", "Save _5m", "Save 7m 30s with _extra"]
+    assert dialogs.last["buttons"] == ["_Keep meditating", "Save the _planned 5m",
+                                       "Save 7m 30s with _extra"]
     assert "Your 5m meditation is complete, and you continued for 2m 30s more" in dialogs.last["body"]
     assert app.running and app.overtime
 
@@ -113,7 +114,8 @@ def test_closing_window_in_extra_time_asks_and_quits(app, clock, dialogs):
     _into_extra_time(app, clock)
     dialogs.answer(R.REJECT)
     assert app.on_close() is False
-    assert dialogs.last["buttons"][1:] == ["Save _5m and quit", "Save 7m 30s with _extra and quit"]
+    assert dialogs.last["buttons"][1:] == ["Save the _planned 5m and quit",
+                                           "Save 7m 30s with _extra and quit"]
     assert journal(bt.DATA_DIR)[-1]["seconds"] == 300
 
 
@@ -143,7 +145,7 @@ def test_close_mid_meditation_save(app, clock, dialogs):
     run_for(app, clock, 120)
     dialogs.answer(R.OK)
     assert app.on_close() is False
-    assert dialogs.last["buttons"][-1] == "End and _save and quit"
+    assert dialogs.last["buttons"][-1] == "_Save and quit"
     assert journal(bt.DATA_DIR)[-1]["seconds"] == 122
 
 
@@ -188,11 +190,13 @@ def test_finish_twice_is_harmless(app, clock):
 
 # ---------------------------------------------------------------- crash safety
 
-def test_checkpoint_written_every_30_seconds(app, clock):
+def test_checkpoint_is_never_more_than_ten_seconds_old(app, clock):
     begin(app, clock, infinite=True)
-    run_for(app, clock, 65)
-    cp = json.load(open(bt.CURRENT_PATH))
-    assert 60 <= cp["seconds"] <= 67 and cp["completed"] is False
+    for _ in range(12):
+        run_for(app, clock, 7)
+        cp = json.load(open(bt.CURRENT_PATH))
+        assert app.elapsed() - cp["seconds"] <= bt.CHECKPOINT_EVERY + 1
+    assert cp["completed"] is False
 
 
 def test_pause_writes_checkpoint(app, clock):
@@ -280,13 +284,15 @@ def test_failed_recovery_moves_checkpoint_aside(make_app):
     assert len(glob.glob(os.path.join(bt.DATA_DIR, "unsaved-*.json"))) == 1
 
 
-def test_crash_in_extra_time_recovers_planned_length(make_app, clock):
+def test_crash_in_extra_time_recovers_planned_length(make_app, clock, dialogs):
     app = make_app()
     begin(app, clock, minutes=5)
     run_for(app, clock, 298 + 9 * 60)
     app.checkpoint()
     app.running = False                 # simulate the process dying here
+    dialogs.answer(R.REJECT)            # "Save to journal", not "Carry on"
     make_app()
+    pump()
     rec = journal(bt.DATA_DIR)[-1]
     assert rec["seconds"] == 300 and rec["unsaved_extra_seconds"] == 540 and rec["recovered"]
 

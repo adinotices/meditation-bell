@@ -4,7 +4,8 @@ usage: _child.py DATA_DIR MODE
   awake    - take and release the real sleep lock and idle inhibitor, print JSON
   sit      - start a meditation (bells muted), checkpoint it at 10 minutes,
              write DATA_DIR/ready, then wait
-  recover  - launch on DATA_DIR (recovering anything left behind), then quit
+  recover  - launch on DATA_DIR, answer "Save to journal" if offered to carry on, quit
+  resume   - launch on DATA_DIR, answer "Carry on", print the state as JSON, quit
   dialog   - start a meditation, open the real End dialog, write DATA_DIR/ready
 """
 import json
@@ -93,6 +94,22 @@ def recover():
     return False
 
 
+def resume():
+    def report():
+        print(json.dumps({"running": app.running, "elapsed": app.elapsed(),
+                          "status": app.status.get_text()}), flush=True)
+        app.quit()
+        return False
+    GLib.timeout_add(500, report)
+    return False
+
+
+if mode in ("recover", "resume"):
+    from gi.repository import Gtk  # noqa: E402
+    answer = Gtk.ResponseType.OK if mode == "resume" else Gtk.ResponseType.REJECT
+    app.run_dialog = lambda dlg: answer
+
+
 def dialog():
     sit()
     os.remove(os.path.join(data, "ready"))
@@ -108,5 +125,5 @@ def dialog():
 
 
 GLib.timeout_add(300, {"awake": awake, "sit": sit, "recover": recover,
-                       "dialog": dialog}[mode])
+                       "resume": resume, "dialog": dialog}[mode])
 sys.exit(app.run([]))

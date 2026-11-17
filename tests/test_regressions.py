@@ -51,24 +51,23 @@ def test_start_now_rings_opening_bell_once(app, clock):
 
 def test_planned_end_passing_while_end_dialog_is_open_saves_what_was_shown(app, clock, dialogs):
     """The planned end may pass while you're reading the End dialog: the closing
-    bell waits, and what's saved is what the dialog said."""
+    bell rings as usual, and what's saved is what the dialog said."""
     begin(app, clock, minutes=2)
     run_for(app, clock, 100)
 
     def end_passes_while_open(_dlg):
         run_for(app, clock, 60)
-        assert "end" not in app.events and not app.overtime
+        assert app.events.count("end") == 1 and app.overtime
         return Gtk.ResponseType.OK
     dialogs.answer(end_passes_while_open)
     app.on_stop_clicked(None)
     rec = journal(bt.DATA_DIR)[-1]
     assert rec["seconds"] == 102 and rec["completed"] is False
-    assert "end" not in app.events
 
 
 def test_end_passing_during_dialog_then_discard_keeps_its_word(app, clock, dialogs):
-    """Reviewer's probe: 1-minute sit, End opened at 40 s. Clicking End must not
-    discard a meditation that has meanwhile become complete, with a bell mid-dialog."""
+    """1-minute meditation, End opened at 40 s ("under a minute isn't saved").
+    The closing bell still rings, and clicking End does what the dialog said."""
     begin(app, clock, minutes=1)
     run_for(app, clock, 38)
 
@@ -78,7 +77,7 @@ def test_end_passing_during_dialog_then_discard_keeps_its_word(app, clock, dialo
     dialogs.answer(wait_then_end)
     app.on_stop_clicked(None)
     assert dialogs.last["buttons"] == ["_Keep meditating", "_End"]
-    assert "end" not in app.events and journal(bt.DATA_DIR) == []
+    assert app.events.count("end") == 1 and journal(bt.DATA_DIR) == []
 
 
 def test_keep_after_end_passed_in_dialog_rings_closing_bell_once(app, clock, dialogs):
@@ -129,7 +128,7 @@ def test_append_after_a_line_without_newline_keeps_both():
 
 def test_no_interval_bell_with_closing_bell_after_sleep(app, clock):
     """Probe A: 60 min sit, bell every 25, lid closed 40 -> 70: rang end AND interval."""
-    begin(app, clock, minutes=60, interval_min=25)
+    begin(app, clock, hours=1, interval_min=25)
     run_for(app, clock, 40 * 60 - 2)
     clock.sleep(30 * 60)
     app._tick()

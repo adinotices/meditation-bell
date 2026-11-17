@@ -19,6 +19,11 @@ desktop_quote() {
     printf '"%s"' "$s"
 }
 
+# don't replace someone else's `bell-timer` command
+if [ -e "$bin" ] && ! grep -q "bell_timer.py" "$bin"; then
+    echo "$bin already exists and isn't Meditation Bell's launcher; not replacing it." >&2
+    exit 1
+fi
 printf '#!/usr/bin/env bash\nexec /usr/bin/python3 %q "$@"\n' "$here/bell_timer.py" > "$bin"
 chmod +x "$bin"
 
@@ -30,7 +35,7 @@ rm -f "$apps/bell-timer.desktop"   # name used by earlier versions
     echo "Name=Meditation Bell"
     echo "Comment=Meditation timer with interval bells and a journal"
     echo "Exec=$(desktop_quote "$bin")"
-    echo "Icon=$here/logo.png"
+    echo "Icon=${here//\\/\\\\}/logo.png"   # a backslash must be written as \\
     echo "Terminal=false"
     echo "Categories=Utility;"
     echo "Keywords=meditation;bell;timer;sit;retreat;zen;"

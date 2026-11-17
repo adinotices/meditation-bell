@@ -164,6 +164,19 @@ def test_real_app_ignores_terminal_hangup_and_quits_on_term(tmp_path):
     assert oct(os.stat(data).st_mode & 0o777) == "0o700"
 
 
+def test_hard_kill_then_carry_on(tmp_path):
+    """Third review: a desktop crash used to end the meditation for good. A
+    checkpoint from moments ago in this boot can be carried on with."""
+    p, pid = _start_sitting(tmp_path)
+    p.kill()
+    p.wait(timeout=10)
+    out = subprocess.run([sys.executable, CHILD, str(tmp_path), "resume"], env=child_env(),
+                         capture_output=True, text=True, timeout=60)
+    state = json.loads(out.stdout.strip().splitlines()[-1])
+    assert state["running"] and state["elapsed"] >= 600
+    assert state["status"].startswith("Carrying on")
+
+
 # ---------------------------------------------------------------- installer
 
 @pytest.mark.parametrize("folder", ["home", 'odd "home" $dir `x` \\ here'])
@@ -189,6 +202,30 @@ def test_installer_writes_launcher_and_command(tmp_path, folder):
     # undo desktop-entry quoting and check it names the command
     assert exec_line.startswith('Exec="') and exec_line.endswith('"')
     assert re.sub(r"\\(.)", r"\1", exec_line[6:-1]) == str(cmd)
+
+
+def test_installer_wont_replace_someone_elses_command(tmp_path):
+    home = tmp_path / "home"
+    (home / ".local/bin").mkdir(parents=True)
+    other = home / ".local/bin/bell-timer"
+    other.write_text("#!/bin/sh\necho a different program\n")
+    out = subprocess.run(["bash", os.path.join(ROOT, "install.sh")],
+                         env={**os.environ, "HOME": str(home)}, capture_output=True, text=True)
+    assert out.returncode == 1 and "not replacing it" in out.stderr
+    assert "a different program" in other.read_text()
+
+
+def test_installer_from_a_folder_with_a_backslash(tmp_path):
+    repo = tmp_path / "my\\repo"
+    repo.mkdir()
+    shutil.copy(os.path.join(ROOT, "install.sh"), repo)
+    home = tmp_path / "home"
+    home.mkdir()
+    subprocess.run(["bash", str(repo / "install.sh")], env={**os.environ, "HOME": str(home)},
+                   check=True, capture_output=True)
+    desktop = (home / ".local/share/applications/io.github.adinotices.MeditationBell.desktop")
+    icon = [l for l in desktop.read_text().splitlines() if l.startswith("Icon=")][0]
+    assert icon == "Icon=" + str(repo).replace("\\", "\\\\") + "/logo.png"
 
 
 def test_source_compiles_cleanly():

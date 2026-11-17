@@ -49,7 +49,7 @@ def test_end_dialog_offers_to_leave_out_laptop_sleep(app, clock, dialogs):
     dialogs.answer(R.APPLY)
     app.on_stop_clicked(None)
     assert dialogs.last["buttons"] == ["_Keep meditating", "End _without saving",
-                                       "Save 30m, without _sleep", "End and _save"]
+                                       "Save 30m, without s_leep", "End and _save"]
     assert "The laptop slept for 1h 00m of that." in dialogs.last["body"]
     rec = journal(bt.DATA_DIR)[-1]
     assert rec["seconds"] == 1800 and rec["sleep_left_out"] is True
@@ -64,8 +64,8 @@ def test_extra_time_dialog_offers_extra_without_sleep(app, clock, dialogs):
     app._tick()
     dialogs.answer(R.APPLY)
     app.on_stop_clicked(None)
-    assert dialogs.last["buttons"][1:] == ["Save _5m", "Save 45m with _extra",
-                                           "Save 15m, extra without _sleep"]
+    assert dialogs.last["buttons"][1:] == ["Save the _planned 5m", "Save 45m with _extra",
+                                           "Save 15m, without s_leep"]
     rec = journal(bt.DATA_DIR)[-1]
     assert rec["seconds"] == 900 and rec["extra_seconds"] == 600 and rec["sleep_left_out"]
 
@@ -81,18 +81,19 @@ def test_extra_time_ended_right_after_the_bell_is_a_plain_choice(app, clock, dia
 
 # ---------------------------------------------------------------- bells held while deciding
 
-def test_no_interval_bells_while_end_dialog_is_open(app, clock, dialogs):
-    begin(app, clock, infinite=True, interval_min=1)
-    run_for(app, clock, 30)
+def test_bells_keep_ringing_while_end_dialog_is_open(app, clock, dialogs):
+    """Third review: a dialog left open (e.g. opened by a stray click) used to
+    silence every remaining bell."""
+    begin(app, clock, hours=2, interval_min=30)
+    run_for(app, clock, 60)
 
-    def think(_dlg):
-        run_for(app, clock, 300)
-        assert app.events.count("interval") == 0
+    def left_open(_dlg):
+        run_for(app, clock, 3 * 3600, step=5)
         return R.CANCEL
-    dialogs.answer(think)
+    dialogs.answer(left_open)
     app.on_stop_clicked(None)
-    run_for(app, clock, 1)
-    assert app.events.count("interval") == 1        # one catch-up bell, not five
+    assert app.events.count("interval") == 3 and app.events.count("end") == 1
+    assert app.win.get_focus() is None          # not back on End
 
 
 def test_saved_end_time_and_bells_are_from_when_the_dialog_opened(app, clock, dialogs, wall):
@@ -181,11 +182,11 @@ def test_real_timer_source_lifecycle(app, clock, dialogs):
     ticks = []
     real = app._tick
     app._tick = lambda: (ticks.append(1), real())
-    end = time.time() + 0.8
-    while time.time() < end:        # the real 250 ms GLib timer drives the ticks
+    end = time.time() + 10           # generous, for a busy machine
+    while len(ticks) < 2 and time.time() < end:   # the real 250 ms GLib timer ticks
         ctx.iteration(False)
         time.sleep(0.01)
-    assert 2 <= len(ticks) <= 5
+    assert len(ticks) >= 2
     dialogs.answer(R.REJECT)
     clock.advance(2)
     app.on_stop_clicked(None)

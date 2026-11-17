@@ -26,7 +26,7 @@ def test_fmt_hm(secs, out):
 
 
 @pytest.mark.parametrize("secs,out", [
-    (0, "0m"), (300, "5m"), (450, "7m 30s"), (61, "1m 1s"), (3600, "1h 00m"),
+    (0, "0s"), (45, "45s"), (300, "5m"), (450, "7m 30s"), (61, "1m 01s"), (3600, "1h 00m"),
     (3930, "1h 05m 30s"), (36000, "10h 00m"),
 ])
 def test_fmt_hms_short(secs, out):
@@ -84,7 +84,7 @@ def test_load_sessions_sorts_and_keeps_junk():
     _write([a, "garbage {", "", b, json.dumps({"no": "start"})])
     sessions, junk = bt.load_sessions()
     assert [s["seconds"] for s in sessions] == [120, 60]
-    assert junk == [(1, "garbage {"), (4, json.dumps({"no": "start"}))]
+    assert junk == [(1, "garbage {"), (2, ""), (4, json.dumps({"no": "start"}))]
 
 
 def test_load_sessions_missing_file():
