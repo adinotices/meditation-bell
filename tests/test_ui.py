@@ -174,7 +174,7 @@ def test_every_state_renders(app, clock, dialogs, mode):
     app.stack.set_visible_child_name("journal")
     render(app)                                            # journal with a row
     app.sw_inf.set_active(True)
-    app.stack.set_visible_child_name("sit")
+    app.stack.set_visible_child_name("meditate")
     surf = render(app)                                     # ∞ ready
     assert surf.get_width() > 300
 

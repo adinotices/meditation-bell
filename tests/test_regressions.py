@@ -15,8 +15,10 @@ def test_dimmed_countdown_rounds_up(app, clock):
     assert app.clock_sub.get_text() == "next bell in 5 minutes"
 
 
-def test_timer_survives_an_exception_in_a_tick(app, clock, monkeypatch):
-    """An error inside one tick used to stop the timer for good."""
+def test_timer_survives_an_exception_in_a_tick(app, clock, monkeypatch,
+                                              fail_on_callback_errors):
+    """An error inside one tick used to stop the timer for good. It's still
+    reported (printed, and caught by the test harness)."""
     begin(app, clock, minutes=30)
     calls = []
 
@@ -26,6 +28,8 @@ def test_timer_survives_an_exception_in_a_tick(app, clock, monkeypatch):
             raise RuntimeError("display glitch")
     monkeypatch.setattr(app, "update_display", boom)
     assert app.tick() is True and app.tick() is True and len(calls) == 2
+    assert [str(e) for e in fail_on_callback_errors] == ["display glitch"]
+    fail_on_callback_errors.clear()
 
 
 def test_length_fields_follow_infinity_after_a_meditation(app, clock, dialogs):
@@ -134,16 +138,13 @@ def test_no_interval_bell_with_closing_bell_after_sleep(app, clock):
     assert app.bells_rung == 1
 
 
-def test_extra_time_lets_the_laptop_sleep(app, clock, monkeypatch):
-    refreshes = []
-    monkeypatch.setattr(app, "refresh_awake", lambda: refreshes.append(1))
+def test_extra_time_lets_the_laptop_sleep(app, clock):
     begin(app, clock, minutes=5)
-    assert app.events.count("inhibit_on") == 1
+    assert app.events.count("inhibit_on") == 1 and app.idle_blocked
     run_for(app, clock, 298 + 1)
-    assert app.overtime and app.events.count("inhibit_off") == 1
-    refreshes.clear()
+    assert app.overtime and app.events.count("lock_off") == 1 and not app.idle_blocked
     run_for(app, clock, 600)
-    assert refreshes == []          # idle is no longer blocked in extra time
+    assert app.events.count("inhibit_on") == 1 and not app.idle_blocked
 
 
 def test_extra_time_stops_counting_when_left_running(app, clock, dialogs):

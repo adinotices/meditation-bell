@@ -105,7 +105,7 @@ def test_start_takes_sleep_lock_and_finish_releases_it(app, clock, dialogs):
     assert app.events.count("inhibit_on") == 1
     dialogs.answer(bt.Gtk.ResponseType.REJECT)
     app.on_stop_clicked(None)
-    assert app.events.count("inhibit_off") == 1
+    assert app.events.count("lock_off") == 1
 
 
 # ---------------------------------------------------------------- warm-up
@@ -202,7 +202,7 @@ def test_dims_after_quiet_and_wakes_on_input(app, clock):
     run_for(app, clock, bt.DIM_AFTER - 5)
     assert not app.dimmed
     run_for(app, clock, 10)
-    assert app.dimmed and app.clock.get_text() == "0:00"
+    assert app.dimmed and app.clock.get_text() == "0m"
     assert app.clock_sub.get_text() == "next bell in 10 minutes"
     app.on_user_input()
     assert not app.dimmed and app.clock.get_text() == "0:00:37"

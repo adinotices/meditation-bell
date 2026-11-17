@@ -220,10 +220,31 @@ def test_recovery_does_not_duplicate(make_app):
     assert len(journal(bt.DATA_DIR)) == 1 and not os.path.exists(bt.CURRENT_PATH)
 
 
-def test_recovery_ignores_short_or_broken_checkpoints(make_app):
+def test_recovery_keeps_a_broken_checkpoint_as_bad(make_app):
     open(bt.CURRENT_PATH, "w").write("{not json")
+    app = make_app()
+    assert journal(bt.DATA_DIR) == [] and not os.path.exists(bt.CURRENT_PATH)
+    assert open(bt.CURRENT_PATH + ".bad").read() == "{not json"
+    assert app.status.get_text().startswith("Note: 1 unreadable saved meditation file")
+
+
+def test_recovery_drops_a_short_checkpoint(make_app):
+    bt.atomic_write_json(bt.CURRENT_PATH, {"start": "2026-11-15T10:00:00-05:00", "seconds": 20})
     make_app()
     assert journal(bt.DATA_DIR) == [] and not os.path.exists(bt.CURRENT_PATH)
+
+
+def test_recovery_never_deletes_a_file_it_cannot_read(make_app):
+    """Second review, probe: an unreadable parked file was deleted."""
+    path = os.path.join(bt.DATA_DIR, "unsaved-20261115100000.json")
+    bt.atomic_write_json(path, {"start": "2026-11-15T10:00:00-05:00", "seconds": 5400})
+    os.chmod(path, 0)
+    make_app()
+    assert os.path.exists(path) and journal(bt.DATA_DIR) == []
+    os.chmod(path, 0o600)
+    make_app()                      # readable again: added, then removed
+    assert [r["seconds"] for r in journal(bt.DATA_DIR)] == [5400]
+    assert not os.path.exists(path)
 
 
 def test_save_failure_is_parked_and_survives_another_meditation(app, clock, dialogs):

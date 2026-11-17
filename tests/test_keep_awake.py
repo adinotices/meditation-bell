@@ -52,14 +52,16 @@ def test_unreadable_idle_config_plays_safe(app, power, monkeypatch, tmp_path):
 def test_block_idle_takes_and_releases_screensaver_inhibit(app, monkeypatch):
     calls = []
 
-    def fake(method, args, reply=None):
+    def fake(method, args, reply=None, done=None):
         calls.append(method)
-        return GLib.Variant("(u)", (77,)) if method == "Inhibit" else None
+        if done:
+            done(GLib.Variant("(u)", (77,)) if method == "Inhibit" else None)
     monkeypatch.setattr(app, "_screensaver", fake)
-    app.block_idle(True)
-    app.block_idle(True)                # no double inhibit
+    block = bt.BellTimer.block_idle    # the real one (the fixture fakes it)
+    block(app, True)
+    block(app, True)                    # no double inhibit
     assert app.ss_cookie == 77 and calls == ["Inhibit"]
-    app.block_idle(False)
+    block(app, False)
     assert app.ss_cookie is None and calls == ["Inhibit", "UnInhibit"]
 
 
@@ -67,6 +69,9 @@ def test_refresh_awake_follows_power_changes(app, power, monkeypatch, clock):
     decisions = []
     monkeypatch.setattr(app, "check_audio_route", lambda: None)
     monkeypatch.setattr(app, "block_idle", decisions.append)
+    monkeypatch.setattr(app, "bells_due", lambda: True)
+    monkeypatch.setattr(app, "idle_would_stop_bells",
+                        lambda: bt.BellTimer.idle_would_stop_bells(app))
     app.audio_on_display = False
     power(battery=False)
     bt.BellTimer.refresh_awake(app)

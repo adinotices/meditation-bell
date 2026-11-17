@@ -84,7 +84,7 @@ def test_load_sessions_sorts_and_keeps_junk():
     _write([a, "garbage {", "", b, json.dumps({"no": "start"})])
     sessions, junk = bt.load_sessions()
     assert [s["seconds"] for s in sessions] == [120, 60]
-    assert junk == ["garbage {", json.dumps({"no": "start"})]
+    assert junk == [(1, "garbage {"), (4, json.dumps({"no": "start"}))]
 
 
 def test_load_sessions_missing_file():
@@ -102,7 +102,8 @@ def test_append_then_rewrite_preserves_junk_and_makes_backup():
     assert open(bt.LOG_PATH + ".bak").read() == before
     after_sessions, after_junk = bt.load_sessions()
     assert [s["seconds"] for s in after_sessions] == [90]
-    assert after_junk == ["hand-written note"]
+    assert after_junk == [(0, "hand-written note")]   # same place: the line above it went
+    assert open(bt.LOG_PATH).read().splitlines()[0] == "hand-written note"
     assert not os.path.exists(bt.LOG_PATH + ".tmp")
 
 
@@ -183,3 +184,54 @@ def test_palettes_have_same_keys():
 
 def test_hex_rgb():
     assert bt.hex_rgb("#ff8000") == pytest.approx((1.0, 128 / 255, 0.0))
+
+
+# ---------------------------------------------------------------- second review
+
+def test_sort_uses_real_time_across_offsets():
+    """01:50-04:00 is 05:50 UTC, earlier than 01:10-05:00 (06:10 UTC)."""
+    bt.append_session({"start": "2026-11-01T01:10:00-05:00", "seconds": 60})
+    bt.append_session({"start": "2026-11-01T01:50:00-04:00", "seconds": 120})
+    assert [s["seconds"] for s in bt.load_sessions()[0]] == [120, 60]
+
+
+def test_rewrite_keeps_hand_edits_exactly():
+    lines = ['{"start": "2026-11-14T07:00:00-05:00", "seconds": 600.5, "planned": "1 hour"}',
+             "my note about the retreat",
+             '{"start": "2026-11-15T07:00:00-05:00", "seconds": 300}']
+    with open(bt.LOG_PATH, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    sessions, junk = bt.load_sessions()
+    bt.rewrite_sessions(sessions[:1], junk)          # delete the second meditation
+    assert open(bt.LOG_PATH).read().splitlines() == lines[:2]
+
+
+@pytest.fixture
+def new_york(monkeypatch):
+    import time
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_split_by_day_on_the_daylight_saving_change(new_york):
+    """1 Nov 2026: clocks go back at 2 am, so that day has 25 hours."""
+    start = dt.datetime(2026, 10, 31, 23, 0).astimezone()
+    parts = list(bt.split_by_day(start, 27 * 3600))
+    assert [(p[0].day, round(p[1])) for p in parts] == [(31, 3600), (1, 25 * 3600), (2, 3600)]
+
+
+def test_fmt_dim():
+    assert [bt.fmt_dim(s) for s in (0, 59, 60, 2700, 3600, 3900)] == \
+        ["0m", "0m", "1m", "45m", "1h 00m", "1h 05m"]
+
+
+@pytest.mark.durable
+def test_atomic_write_is_durable(monkeypatch, tmp_path):
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real(fd)))
+    bt.atomic_write_json(str(tmp_path / "x.json"), {"a": 1})
+    assert len(synced) == 2          # the file, then its folder

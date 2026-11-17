@@ -23,22 +23,28 @@ sys.path.insert(0, ROOT)
 REAL_DBUS = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
 os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/nonexistent/bell-timer-tests"
 
-def _start_broadway():
-    """Start broadwayd on a free display; it prints "Listening on ..." once ready
-    (its socket is abstract, so there's no file to wait for)."""
+def start_broadway(first=None):
+    """Start broadwayd on a free display; returns (process, ":N"). It prints
+    "Listening on ..." once ready (its socket is abstract: no file to wait for)."""
     import select
-    for n in range(40 + os.getpid() % 40, 120):
+    first = first or 40 + os.getpid() % 40
+    for n in range(first, first + 80):
         proc = subprocess.Popen(["broadwayd", f":{n}"], stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True)
         ready, _, _ = select.select([proc.stdout], [], [], 5)
         line = proc.stdout.readline() if ready else ""
         if line.startswith("Listening"):
-            os.environ["GDK_BACKEND"] = "broadway"
-            os.environ["BROADWAY_DISPLAY"] = f":{n}"
-            return proc
+            return proc, f":{n}"
         proc.kill()      # display taken (or broken): try the next one
         proc.wait()
     sys.exit("tests: broadwayd would not start (set BELL_TEST_DISPLAY=native to use your display)")
+
+
+def _start_broadway():
+    proc, disp = start_broadway()
+    os.environ["GDK_BACKEND"] = "broadway"
+    os.environ["BROADWAY_DISPLAY"] = disp
+    return proc
 
 
 _broadway = None
@@ -143,6 +149,14 @@ def wall(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fast_disk(monkeypatch, request):
+    """Simulated hours checkpoint every 10 s; real fsyncs would make that slow.
+    Tests marked `durable` keep them."""
+    if "durable" not in request.keywords:
+        monkeypatch.setattr(os, "fsync", lambda fd: None)
+
+
+@pytest.fixture(autouse=True)
 def fail_on_callback_errors(monkeypatch):
     """PyGObject prints and swallows exceptions raised in GTK callbacks (draw
     handlers, timers). Collect them and fail the test instead."""
@@ -204,13 +218,27 @@ def make_app(data_dir, clock, monkeypatch):
     apps = []
 
     def make(stub_system=True):
+        for old in apps:          # earlier apps in this test count as closed (or crashed)
+            old.release_lock()
         app = bt.BellTimer()
         app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
         app.events = []
         if stub_system:
-            app.inhibit_on = lambda: app.events.append("inhibit_on")
-            app.inhibit_off = lambda: app.events.append("inhibit_off")
-            app.refresh_awake = lambda: None
+            # the decisions in refresh_awake run for real; only the system calls are faked
+            def lock_on():
+                app.events.append("inhibit_on")
+                app.sleep_fd = -1
+
+            def lock_off():
+                if app.sleep_fd is not None:
+                    app.events.append("lock_off")
+                app.sleep_fd = None
+            app.inhibit_on = lock_on
+            app.inhibit_off_sleep = lock_off
+            app.block_idle = lambda on: setattr(app, "idle_blocked", on)
+            app.check_audio_route = lambda: None
+            app.idle_would_stop_bells = lambda: True
+            app.watch_shutdown = lambda: None
         app.register(None)
         app.activate()
         b = app.bell
@@ -231,7 +259,9 @@ def make_app(data_dir, clock, monkeypatch):
             GLib.source_remove(app.warm_id)
             app.warm_id = None
         app.running = app.warming = False
-        app.win.destroy()
+        app.release_lock()
+        if app.win:
+            app.win.destroy()
     pump()
 
 

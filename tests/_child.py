@@ -5,6 +5,7 @@ usage: _child.py DATA_DIR MODE
   sit      - start a meditation (bells muted), checkpoint it at 10 minutes,
              write DATA_DIR/ready, then wait
   recover  - launch on DATA_DIR (recovering anything left behind), then quit
+  dialog   - start a meditation, open the real End dialog, write DATA_DIR/ready
 """
 import json
 import os
@@ -14,6 +15,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bell_timer as bt  # noqa: E402
+import time  # noqa: E402
+
 from gi.repository import Gio, GLib  # noqa: E402
 
 data, mode = sys.argv[1], sys.argv[2]
@@ -24,7 +27,8 @@ bt.CONFIG_PATH = os.path.join(data, "config.json")
 bt.Gst.init(None)
 app = bt.BellTimer()
 app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
-for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+signal.signal(signal.SIGHUP, signal.SIG_IGN)      # as main() does
+for sig in (signal.SIGTERM, signal.SIGINT):
     GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, app.on_signal)
 
 
@@ -38,15 +42,29 @@ def mine(lines):
     return any(str(os.getpid()) in line.split() for line in lines)
 
 
+def wait_until(cond, timeout=10):
+    """Run the main loop until cond() (the D-Bus calls answer asynchronously)."""
+    end = time.time() + timeout
+    ctx = GLib.MainContext.default()
+    while not cond() and time.time() < end:
+        ctx.iteration(False)
+        time.sleep(0.01)
+    return cond()
+
+
 def awake():
     r = {}
+    app.running, app.paused, app.overtime, app.target, app.interval = True, False, False, None, 60
     app.inhibit_on()
+    wait_until(lambda: app.sleep_fd is not None)
     r["sleep_fd"] = app.sleep_fd
     r["listed_while_on"] = mine(inhibitors())
     app.block_idle(False)
     app.block_idle(True)
-    r["screensaver_cookie"] = app.ss_cookie
+    r["screensaver_cookie"] = (app.ss_cookie if wait_until(lambda: app.ss_cookie is not None, 5)
+                               else None)
     r["gtk_cookie"] = app.inhibit_cookie
+    app.running = False
     app.inhibit_off()
     r["cookie_after"] = app.ss_cookie
     r["listed_after"] = mine(inhibitors())
@@ -63,6 +81,7 @@ def sit():
     app.on_start_pause(None)
     app.accum = 600                         # pretend ten minutes have passed
     app.checkpoint()
+    wait_until(lambda: app.sleep_fd is not None)
     with open(os.path.join(data, "ready"), "w") as f:
         json.dump({"pid": os.getpid(), "sleep_lock": app.sleep_fd is not None,
                    "listed": mine(inhibitors())}, f)
@@ -74,5 +93,20 @@ def recover():
     return False
 
 
-GLib.timeout_add(300, {"awake": awake, "sit": sit, "recover": recover}[mode])
+def dialog():
+    sit()
+    os.remove(os.path.join(data, "ready"))
+
+    def opened():
+        if app._dialogs:
+            open(os.path.join(data, "ready"), "w").write("{}")
+            return False
+        return True
+    GLib.timeout_add(100, opened)
+    app.on_stop_clicked(None)       # blocks in the dialog's own main loop
+    return False
+
+
+GLib.timeout_add(300, {"awake": awake, "sit": sit, "recover": recover,
+                       "dialog": dialog}[mode])
 sys.exit(app.run([]))

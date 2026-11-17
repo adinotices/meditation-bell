@@ -2,6 +2,7 @@
 logout/crash behaviour of a real app process, and the installer.
 Skip with `pytest -m "not system"`."""
 import json
+import re
 import os
 import shutil
 import signal
@@ -12,11 +13,25 @@ import time
 import pytest
 
 import bell_timer as bt
-from conftest import REAL_DBUS, ROOT
+from conftest import REAL_DBUS, ROOT, start_broadway
 
 pytestmark = pytest.mark.system
 Gst = bt.Gst
 CHILD = os.path.join(ROOT, "tests", "_child.py")
+
+
+@pytest.fixture(autouse=True)
+def own_display(monkeypatch):
+    """Each app process gets its own Broadway display: one display server
+    shared by several apps drops connections ("Unable to write to server")."""
+    if os.environ.get("GDK_BACKEND") != "broadway" or not shutil.which("broadwayd"):
+        yield
+        return
+    proc, disp = start_broadway(first=120 + os.getpid() % 40)
+    monkeypatch.setenv("BROADWAY_DISPLAY", disp)
+    yield
+    proc.terminate()
+    proc.wait()
 
 
 def child_env():
@@ -121,19 +136,59 @@ def test_hard_kill_releases_lock_and_is_recovered_on_next_launch(tmp_path):
     assert not os.path.exists(tmp_path / "current.json")
 
 
+def test_logout_with_end_dialog_open_exits_promptly(tmp_path):
+    """Second review: the End dialog's own main loop kept the app alive after
+    a logout signal until someone clicked it."""
+    p = subprocess.Popen([sys.executable, CHILD, str(tmp_path), "dialog"], env=child_env(),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert wait_for(lambda: os.path.exists(tmp_path / "ready"), 30), "dialog never opened"
+    p.send_signal(signal.SIGTERM)
+    assert p.wait(timeout=5) == 0
+    recs = [json.loads(l) for l in open(tmp_path / "sessions.jsonl")]
+    assert len(recs) == 1 and recs[0]["seconds"] >= 600
+
+
+def test_real_app_ignores_terminal_hangup_and_quits_on_term(tmp_path):
+    """Runs bell_timer.py itself (its main()) with a private home folder."""
+    env = {**os.environ, "HOME": str(tmp_path)}      # no session bus: stays separate
+    p = subprocess.Popen([sys.executable, os.path.join(ROOT, "bell_timer.py")], env=env,
+                         stdout=subprocess.DEVNULL, stderr=open(tmp_path / "stderr", "w"))
+    data = tmp_path / ".local/share/bell-timer"
+    assert wait_for(lambda: os.path.exists(data / ".lock"), 30), "app never started"
+    time.sleep(1)
+    p.send_signal(signal.SIGHUP)                      # the terminal it came from closed
+    time.sleep(1)
+    assert p.poll() is None, (tmp_path / "stderr").read_text()[-2000:]
+    p.send_signal(signal.SIGTERM)
+    assert p.wait(timeout=10) == 0
+    assert oct(os.stat(data).st_mode & 0o777) == "0o700"
+
+
 # ---------------------------------------------------------------- installer
 
-def test_installer_writes_launcher_and_command(tmp_path):
-    home = tmp_path / "home"
+@pytest.mark.parametrize("folder", ["home", 'odd "home" $dir `x` \\ here'])
+def test_installer_writes_launcher_and_command(tmp_path, folder):
+    home = tmp_path / folder
     home.mkdir()
+    apps = home / ".local/share/applications"
+    apps.mkdir(parents=True)
+    (apps / "bell-timer.desktop").write_text("old")          # from an earlier version
     env = {**os.environ, "HOME": str(home)}
     subprocess.run(["bash", os.path.join(ROOT, "install.sh")], env=env, check=True,
                    capture_output=True)
     cmd = home / ".local/bin/bell-timer"
-    desktop = (home / ".local/share/applications/bell-timer.desktop").read_text()
-    assert os.access(cmd, os.X_OK) and os.path.join(ROOT, "bell_timer.py") in cmd.read_text()
-    assert f'Exec="{cmd}"' in desktop and f"Icon={ROOT}/logo.png" in desktop
-    assert "StartupWMClass=bell-timer" in desktop
+    assert os.access(cmd, os.X_OK)
+    # the launcher really runs this app's file, whatever the folder is called
+    dry = cmd.read_text().replace("exec /usr/bin/python3", "printf '%s\\n'")
+    out = subprocess.run(["bash", "-c", dry], capture_output=True, text=True)
+    assert out.stdout.splitlines() == [os.path.join(ROOT, "bell_timer.py")]
+    desktop = (apps / "io.github.adinotices.MeditationBell.desktop").read_text()
+    assert not (apps / "bell-timer.desktop").exists()
+    assert f"Icon={ROOT}/logo.png" in desktop and "StartupWMClass=bell-timer" in desktop
+    exec_line = [l for l in desktop.splitlines() if l.startswith("Exec=")][0]
+    # undo desktop-entry quoting and check it names the command
+    assert exec_line.startswith('Exec="') and exec_line.endswith('"')
+    assert re.sub(r"\\(.)", r"\1", exec_line[6:-1]) == str(cmd)
 
 
 def test_source_compiles_cleanly():
