@@ -235,3 +235,28 @@ def test_atomic_write_is_durable(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real(fd)))
     bt.atomic_write_json(str(tmp_path / "x.json"), {"a": 1})
     assert len(synced) == 2          # the file, then its folder
+
+
+def _css_rules():
+    """(selector, declarations) pairs from the stylesheet, braces un-doubled."""
+    import re
+    css = bt.CSS_TEMPLATE.format(**bt.PALETTES["light"])   # fills {text} etc., un-doubles braces
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    return [(sel.strip(), body) for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def test_thin_type_is_only_used_large():
+    """Contrast ratios don't see stroke weight: hairline type (weight below 400) is
+    hard to read unless it's big, whatever its colour. Allow it only from 3em up
+    (the clock); smaller text uses regular weight or heavier."""
+    import re
+    bad = {}
+    rules = _css_rules()
+    assert any(".clock" in sel for sel, _ in rules), "stylesheet didn't parse"
+    for sel, body in rules:
+        w = re.search(r"font-weight:\s*(\d+)", body)
+        if w and int(w.group(1)) < 400:
+            size = re.search(r"font-size:\s*([\d.]+)em", body)
+            if not size or float(size.group(1)) < 3:
+                bad[sel] = body.strip()
+    assert not bad, f"thin type at small size: {bad}"

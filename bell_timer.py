@@ -183,7 +183,7 @@ scale slider {{ background-color: {accent}; border: 2px solid {surface};
 
 /* timer */
 .phase {{ color: {muted}; font-size: 0.85em; font-weight: 600; }}
-.clock {{ font-size: 4.2em; font-weight: 300; color: {text};
+.clock {{ font-family: "Noto Serif Display", serif; font-size: 4.0em; font-weight: 300; color: {text};
           font-feature-settings: "tnum"; }}
 .clock-sub {{ color: {muted}; font-size: 1.0em; }}
 .status {{ color: {accent}; font-size: 0.95em; }}
@@ -191,7 +191,7 @@ scale slider {{ background-color: {accent}; border: 2px solid {surface};
 .summary {{ color: {muted}; font-size: 1.0em; }}
 
 /* journal */
-.stat-num {{ font-size: 1.7em; font-weight: 300; color: {text};
+.stat-num {{ font-size: 1.7em; font-weight: 400; color: {text};
              font-feature-settings: "tnum"; }}
 .stat-lbl {{ color: {muted}; font-size: 0.85em; }}
 treeview.view {{ background-color: {surface}; color: {text}; }}
@@ -470,6 +470,57 @@ def hex_rgb(h):
     return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
+ART_DIR = os.path.join(APP_DIR, "art")
+_ART_CACHE = {}
+
+
+def art_surface(motif, dark):
+    """Brush-ink artwork (ensō, lotus, Bodhi leaf, moon) as a cairo surface in the
+    colour for the current theme, or None if the file is missing (purely decorative)."""
+    key = (motif, dark)
+    if key not in _ART_CACHE:
+        path = os.path.join(ART_DIR, f"{motif}_{'cream' if dark else 'ink'}.png")
+        try:
+            _ART_CACHE[key] = cairo.ImageSurface.create_from_png(path)
+        except (OSError, cairo.Error, MemoryError):
+            _ART_CACHE[key] = None
+    return _ART_CACHE[key]
+
+
+def paint_art(cr, surf, cx, cy, size, alpha):
+    """Paint surf centred on (cx, cy), fitted into a size x size square."""
+    if surf is None or size <= 0:
+        return
+    sw, sh = surf.get_width(), surf.get_height()
+    k = size / max(sw, sh)
+    cr.save()
+    cr.translate(cx - sw * k / 2, cy - sh * k / 2)
+    cr.scale(k, k)
+    cr.set_source_surface(surf, 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_GOOD)
+    cr.paint_with_alpha(alpha)
+    cr.restore()
+
+
+class Motif(Gtk.DrawingArea):
+    """A small decorative brush image; hidden from assistive technology."""
+
+    def __init__(self, app, motif, height, alpha=0.9):
+        super().__init__()
+        self.app, self.motif, self.alpha = app, motif, alpha
+        self.set_size_request(-1, height)
+        acc = self.get_accessible()
+        if acc is not None:
+            acc.set_role(Atk.Role.REDUNDANT_OBJECT)
+        self.connect("draw", self.on_draw)
+
+    def on_draw(self, widget, cr):
+        dark = self.app.palette is PALETTES["dark"]
+        motif = self.motif(dark) if callable(self.motif) else self.motif
+        w, h = widget.get_allocated_width(), widget.get_allocated_height()
+        paint_art(cr, art_surface(motif, dark), w / 2, h / 2, h, self.alpha)
+
+
 def add_class(widget, *names):
     ctx = widget.get_style_context()
     for n in names:
@@ -676,6 +727,10 @@ class Ring(Gtk.DrawingArea):
         dim = self.app.dimmed
         arc_color = pal["muted"] if dim else pal["accent"]
 
+        # brushed ensō behind the ring (decorative; fainter when dimmed)
+        paint_art(cr, art_surface("enso_a", pal is PALETTES["dark"]), cx, cy,
+                  2 * r + 16, 0.10 if dim else 0.20)
+
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.set_line_width(3)
         # with nothing to show (until-I-stop, no interval) keep the circle visible
@@ -877,6 +932,8 @@ class BellTimer(Gtk.Application):
         if self.win:
             self.ring.queue_draw()
             self.chart.queue_draw()
+            for m in getattr(self, "motifs", ()):
+                m.queue_draw()
             self.update_theme_button()
 
     def watch_system_theme(self):
@@ -1241,6 +1298,9 @@ class BellTimer(Gtk.Application):
         box.set_margin_top(12)
         box.set_margin_bottom(24)
 
+        self.motifs = [Motif(self, "lotus", 46)]
+        box.pack_start(self.motifs[0], False, False, 0)
+
         g = Gtk.Grid(column_spacing=10, row_spacing=10, column_homogeneous=True)
         self.stat_labels = {}
         keys = [("today", "Today"), ("week", "Last 7 days"), ("month", "Last 30 days"),
@@ -1296,7 +1356,17 @@ class BellTimer(Gtk.Application):
         bb.pack_end(rm, False, False, 0)
         lc.pack_start(bb, False, False, 0)
         box.pack_start(lc, True, True, 0)
-        return box
+        # closing motif: Bodhi leaf by day, crescent moon by night
+        end = Motif(self, lambda dark: "moon" if dark else "bodhi", 40, alpha=0.8)
+        self.motifs.append(end)
+        box.pack_start(end, False, False, 0)
+        # scroll when space is short, so this page never sets a tall minimum for
+        # the shared window (which would push Begin off a short screen)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_propagate_natural_height(True)
+        scroller.add(box)
+        return scroller
 
     def _spin(self, lo, hi, val, a11y_name):
         s = Gtk.SpinButton.new_with_range(lo, hi, 1)

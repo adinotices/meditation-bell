@@ -295,3 +295,26 @@ def test_shipped_bells_are_found():
     bell = bt.Bell(bt.BELL_PATH, bt.START_BELL_PATH, bt.END_BELL_PATH)
     assert bell.missing == []
     assert len({bell.uri, bell.start_uri, bell.end_uri}) == 3
+
+
+# ---------------------------------------------------------------- window size
+
+def test_window_fits_short_screens(app):
+    """The pages share one window, so a tall page raises everyone's minimum height
+    and pushes the Begin button off screen on a short display (a 2026-11 regression:
+    journal artwork took the window from 872 to 992 px). Keep it modest."""
+    pump()
+    min_h, _ = app.win.get_preferred_height()
+    assert min_h <= 760, f"window needs {min_h}px; Begin would be cut off on short screens"
+
+
+def test_begin_visible_in_short_window(app):
+    """Begin stays inside a 700 px tall window, whichever page was built tallest."""
+    app.win.resize(480, 700)
+    pump()
+    alloc = app.btn_start.get_allocation()
+    pos = app.btn_start.translate_coordinates(app.win, 0, 0)
+    win_h = app.win.get_allocation().height
+    assert pos is not None and app.btn_start.get_mapped()
+    y = pos[-1]
+    assert y + alloc.height <= win_h, f"Begin ends at {y + alloc.height}, window is {win_h}px"
