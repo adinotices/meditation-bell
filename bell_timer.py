@@ -782,10 +782,9 @@ class DayChart(Gtk.DrawingArea):
                 cr.line_to(x, top + ch)
                 cr.close_path()
                 cr.fill()
-                if d == today or v == max(val for _, val in self.values):
-                    hrs = v / 3600
-                    vl = f"{hrs:.1f}h" if hrs >= 1 else f"{int(v // 60)}m"
-                    text(vl, cx, y0 - 16, pal["text"])
+                hrs = v / 3600
+                vl = f"{hrs:.1f}h" if hrs >= 1 else f"{int(v // 60)}m"
+                text(vl, cx, y0 - 16, pal["text"])
             # today is marked by weight as well as colour
             text(d.strftime("%-d"), cx, h - 17,
                  pal["accent"] if d == today else pal["muted"], bold=d == today)
